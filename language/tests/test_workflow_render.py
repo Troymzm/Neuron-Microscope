@@ -119,6 +119,11 @@ const data = {
   evidence: {
     'criticism:example': {section: 'criticism', label: 'Case', locator: {row: 0, sample: 0},
       details: {position: 4, token: ' et', location: 'replacement_span', reduction: 'absmax'}},
+    'criticism:selected': {section: 'criticism', label: 'Selected', locator: {row: 5, sample: 0}},
+    'criticism:omitted': {section: 'criticism', label: 'Archived', locator: {row: 5, sample: 1},
+      text: 'Abbreviated excerpt'},
+    'criticism:raw-result': {section: 'criticism', label: 'Archived result', locator: {row: 5},
+      details: {result: 'Abbreviated result'}},
     'criticism:section-only': {section: 'criticism', label: 'Old section link'},
   },
 };
@@ -180,6 +185,36 @@ location.hash = link.attrs.href;
 callbacks.hashchange();
 assert.equal(folded.open, true);
 assert.equal(focused, sample);
+
+const grouped = {tagName: 'DETAILS', querySelector: selector => selector === '.bodyc' && body};
+const body = $('div', {class: 'bodyc'});
+body.prepend = child => { child.parentElement = grouped; body.children.unshift(child); };
+sample.parentElement = grouped;
+criticism.querySelector = selector => ({
+  '[data-criticism-id]': grouped,
+  '[data-criticism-id="C2"]': grouped,
+  '[data-criticism-row="5"][data-criticism-sample="0"]': sample,
+})[selector];
+criticism.querySelectorAll = () => { throw new Error('Grouped reports cannot use visual row indices'); };
+B.criticism = [];
+B.criticism[5] = {criticism_ids: ['C9', 'C2'], evidence: [null, {text: 'Exact saved context'}],
+  result: 'Exact saved assessment'};
+Element.prototype.focus = function () { focused = this; };
+Element.prototype.scrollIntoView = function () {};
+location.hash = '#evidence-criticism%3Aselected';
+callbacks.hashchange();
+assert.equal(focused, sample);
+grouped.open = false;
+location.hash = '#evidence-criticism%3Aomitted';
+callbacks.hashchange();
+assert.equal(grouped.open, true);
+assert.equal(focused, body.children[0]);
+assert.match(text(focused), /Exact saved context/);
+assert.doesNotMatch(text(focused), /Abbreviated excerpt/);
+location.hash = '#evidence-criticism%3Araw-result';
+callbacks.hashchange();
+assert.match(text(focused), /Exact saved assessment/);
+assert.doesNotMatch(text(focused), /Abbreviated result/);
 """
         script = fixture + renderer.read_text(encoding='utf-8') + checks
         result = subprocess.run(['node', '-'], input=script, encoding='utf-8', capture_output=True)
@@ -359,6 +394,25 @@ class WalkthroughExportTest(unittest.TestCase):
             self.assertNotIn('followup/report-synthesis', call_ids)
             self.assertIn('followup/report-synthesis/overview/lede', call_ids)
             self.assertTrue((call / 'result.json').is_file())
+
+            final_claim = {**synthesis['claim'], 'findings': {'main_response': {'evidence_ids': ['C1']}}}
+            judgments = {'C1': {'verdict': 'narrowed', 'conclusion': 'Limited to the measured frame.',
+                                'evidence_ids': ['criticism:original-1']}}
+            reviewed = {**synthesis, 'claim': final_claim, 'criticism_findings': judgments}
+            (run / 'report/index.html').write_text(
+                f'<script id="bundle">{encode_bundle(bundle)}</script>'
+                f'<script id="report-synthesis">{json.dumps(reviewed)}</script>')
+            for field in ('title', 'lede'):
+                part = call / 'final-claim/claim-overview' / field
+                write(part / 'result.json', {'attempt': 'attempt-1', 'output': {'text': final_claim[field]}})
+                write(part / 'attempt-1/request.json', {'model': 'Fixture', 'input': messages})
+            with contextlib.redirect_stdout(io.StringIO()):
+                export(run, output)
+            reviewed_episode = read(output / 'content/episode.json')
+            calls = {entry['id'] for entry in reviewed_episode['calls']}
+            self.assertIn('followup/report-synthesis/final-claim/claim-overview/lede', calls)
+            self.assertNotIn('followup/report-synthesis/sections/criticism', calls)
+            self.assertEqual(reviewed_episode['synthesis']['criticism_findings'], judgments)
 
             bundle['criticism'] = bundle['criticism'][:1]
             (run / 'report/index.html').write_text(

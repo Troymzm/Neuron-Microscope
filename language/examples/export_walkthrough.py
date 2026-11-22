@@ -255,10 +255,14 @@ def export(run, output):
         or (status_path.is_file() and read(status_path).get('stop_reason')))
     replay = report_replay(final_html, bundle)
     active_api = run / ('followup/api' if followup else 'api')
-    claim = replay.get('synthesis', {}).get('claim', {})
+    synthesis = replay.get('synthesis', {})
+    claim = synthesis.get('claim', {})
     findings = claim.get('findings', {})
     revised_claim = 'main_response' in findings
-    overview = active_api / 'report-synthesis' / ('claim-overview' if revised_claim else 'overview')
+    final_claim = bool(synthesis.get('criticism_findings'))
+    synthesis_api = active_api / 'report-synthesis'
+    overview = (synthesis_api / 'final-claim' / 'claim-overview' if final_claim
+                else synthesis_api / ('claim-overview' if revised_claim else 'overview'))
     split_synthesis = all(
         key in claim and (overview / key / 'result.json').is_file()
         and read(overview / key / 'result.json')['output'].get('text') == claim[key]
@@ -269,6 +273,10 @@ def export(run, output):
         retired += tuple(f'report-synthesis/findings/{name}'
                          for name in ('pattern', 'strength', 'mechanism', 'open_questions'))
         retired += ('report-synthesis/overview/title', 'report-synthesis/overview/lede')
+    if split_synthesis and final_claim:
+        retired += tuple(f'report-synthesis/findings/{name}' for name in findings)
+        retired += ('report-synthesis/claim-overview/title', 'report-synthesis/claim-overview/lede',
+                    'report-synthesis/sections/criticism')
     for name in ('content', 'reports', 'screenshots'):
         shutil.rmtree(output / name, ignore_errors=True)
     if followup:

@@ -1,10 +1,15 @@
 """Keep generated reports in the reference paper's section structure."""
 import copy
 import json
-from paper_reading import GROUP_LABELS
 import re
 from pathlib import Path
-from common import read
+
+if __package__:
+    from .common import read
+    from .paper_reading import GROUP_LABELS
+else:
+    from common import read
+    from paper_reading import GROUP_LABELS
 
 COLOURS = "// Group summaries use the measured signs of their members.\nconst poleOf = g => typeof g.pole === 'number' ? (g.pole > 0 ? 'positive' : g.pole < 0 ? 'negative' : 'either') : (g.pole || 'either');\nconst isOther = g => /^other$/i.test(String(g.id || '')) || /^other$/i.test(g.name || '');\n"
 
@@ -363,37 +368,59 @@ VERDICT_CODE = r"""const verdictOf = value => {
 CRITICISM = r"""// 8. Criticism.
 (() => { const K = B.criticism; if (!has(K)) return;
   __VERDICT_CODE__
+  const findings = JSON.parse(document.getElementById('criticism-findings')?.textContent || '{}');
   const s = Math.max(...K.flatMap(k => (k.evidence || []).map(e => Math.abs(e.activation || 0))), 1e-9);
-  const grouped = new Map();
-  K.forEach(k => {
-    const round = k.investigation_id ? Number(k.round) : 0;
-    if (!grouped.has(round)) grouped.set(round, []);
-    grouped.get(round).push(k);
+  const originals = [], evidence = new Map();
+  K.forEach((item, index) => {
+    const id = item.investigation_id || `original-${index + 1}`;
+    const source = {item, index};
+    if (!item.investigation_id) originals.push(source);
+    evidence.set(`criticism:${id}`, source);
+    (item.evidence || []).forEach((example, sample) => {
+      evidence.set(`criticism:${id}:${example.id || sample + 1}`, {...source, example, sample});
+    });
   });
-  const row = (k, number) => {
-    const verdict=verdictOf(k.verdict), original=String(k.verdict || '').trim();
-    const attack = k.investigation_id ? (k.attack || '').replace(/^Follow-up round \d+:\s*/, '') : (k.attack || '');
-    return $('details', {class:'crow'},
-      $('summary', null, $('span', {class:'n',style:'white-space:nowrap'}, number),
-        $('span', null, $('span', {class:'pill '+verdict}, verdict || '—')),
-        $('span', {class:'att',title:attack}, attack)),
-      $('div', {class:'bodyc'},
-        k.prediction ? P($('b',null,'Prediction. '),k.prediction) : null,
-        k.result ? P($('b',null,'Result. '),k.result) : null,
-        original && original.toLowerCase()!==verdict ? P($('b',null,'Verdict. '),original) : null,
-        has(k.evidence) ? $('div',{class:'ev'},k.evidence.map(e=>$('div',null,
-          tile(e.activation,{signed:true,scale:s}),$('span',null,e.text)))) : null));
+  const evidenceNode = ({item, index, example, sample}, originalIndex) => {
+    const source = item.investigation_id ? `Round ${item.round} · ${item.investigation_id}` : 'Original evidence';
+    const attrs = {'data-criticism-row':index, 'data-criticism-sample':sample};
+    if (!example) return item.result && index !== originalIndex
+      ? $('p',attrs,$('b',null,`${source}. `),item.result)
+      : null;
+    const excerpt = has(example.token_activations)
+      ? toks(example.token_activations, example.peak_index, null, example.activation < 0,
+          {left:example.cut_left, right:example.cut_right})
+      : example.text;
+    const {token, position} = example.selected || {};
+    const scoring = [token != null && `Scored token ${JSON.stringify(token)}`,
+      Number.isInteger(position) && `position ${position} (0-based)`,
+      example.score?.location?.replaceAll('_', ' ')].filter(Boolean).join(' · ');
+    return $('div',attrs,tile(example.activation,{signed:true,scale:s}),
+      $('span',null,$('span',{class:'cap',style:'display:block'},source),excerpt,
+        scoring && $('span',{class:'cap scored-evidence',style:'display:block'},scoring)));
   };
-  const groups = [...grouped].sort(([a], [b]) => a - b).map(([round, entries]) => {
-    const title = round ? `Follow-up Round ${round}` : 'Original Criticism';
-    return $('div', {class:'criticism-group','data-round':round,style:'margin:26px 0 0'},
-      $('h3', {style:'display:flex;align-items:baseline;gap:12px;margin:0 0 12px;font-size:17px'},
-        title, $('span', {class:'quiet',style:'font-size:13px;font-weight:400'}, `${entries.length} ${entries.length === 1 ? 'item' : 'items'}`)),
-      $('div', null, entries.map((k, i) => row(k, round ? `${round}.${i + 1}` : `C${i + 1}`))));
+  const rows = originals.map(({item, index}, i) => {
+    const id = `C${i + 1}`, final = findings[id];
+    const pending = !final && K.some(k => k.criticism_ids?.includes(id));
+    const original = String(item.verdict || '').trim();
+    const verdict = verdictOf(final?.verdict || (!pending && original));
+    const conclusion = final?.conclusion || (pending ? 'Final judgment pending.' : item.result);
+    const refs = final ? final.evidence_ids.map(key => evidence.get(key)).filter(Boolean) :
+      (item.evidence || []).map((example, sample) => ({item,index,example,sample}));
+    return $('details', {class:'crow','data-criticism-id':id,'data-criticism-row':index},
+      $('summary', {style:'grid-template-columns:max-content max-content minmax(0,1fr);gap:0 10px;align-items:start'},
+        $('span', {class:'n'}, id), $('span', {class:'pill '+verdict}, verdict || '—'),
+        $('span', {class:'att',style:'white-space:normal;overflow-wrap:anywhere'},
+          $('b',null,item.attack), conclusion && $('span',{style:'display:block;font-weight:normal'},conclusion))),
+      $('div', {class:'bodyc'},
+        item.prediction ? P($('b',null,'Original prediction. '),item.prediction) : null,
+        pending && item.result ? P($('b',null,'Initial finding. '),item.result) : null,
+        !final && original && original.toLowerCase()!==verdict ? P($('b',null,'Verdict. '),original) : null,
+        has(refs) ? $('div',{class:'ev'},refs.map(ref=>evidenceNode(ref,index))) : null));
   });
+  if (!has(rows)) return;
   sec('criticism','Criticism',
-    [P('Grouped by original criticism and follow-up round. Counts refer to items. Open an item to view its predictions, results, and evidence.')],
-    $('div',null,groups));
+    [P('Open a question to see its original prediction and the evidence behind its judgment.')],
+    $('div',null,rows));
 })();
 
 """.replace('__VERDICT_CODE__',VERDICT_CODE)

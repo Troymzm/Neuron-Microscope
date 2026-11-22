@@ -42,6 +42,12 @@
       return table?.tBodies[0]?.rows[index];
     }
     if (entry.section === 'criticism') {
+      if (section.querySelector('[data-criticism-id]')) {
+        const source = `[data-criticism-row="${row}"]`;
+        return section.querySelector(source + (sample == null
+          ? ':not([data-criticism-sample])'
+          : `[data-criticism-sample="${sample}"]`));
+      }
       const item = section.querySelectorAll('details.crow')[row];
       return sample == null ? item : item?.querySelector('.ev')?.children[sample];
     }
@@ -55,14 +61,27 @@
     if (!target) {
       // A filtered plot or old report may not have a persistent node for the sample.
       const figure = entry.locator?.figure;
-      const host = (figure && document.getElementById('custom-' + figure)) ||
+      const criticism = entry.section === 'criticism' && B.criticism?.[entry.locator?.row];
+      const question = criticism && (criticism.criticism_ids || []).map(id =>
+        section?.querySelector(`[data-criticism-id="${id}"]`)).find(Boolean);
+      const original = criticism && section?.querySelector(`details[data-criticism-row="${entry.locator.row}"]`);
+      const host = (original || question)?.querySelector('.bodyc') ||
+        (figure && document.getElementById('custom-' + figure)) ||
         section?.querySelector('.figs') || document.querySelector('#claim .figs');
       sampleCard.replaceChildren($('summary', null, entry.label));
-      if (entry.text) {
-        if (entry.text.startsWith('…') || entry.text.endsWith('…')) sampleCard.append($('p', {class: 'sub'}, 'Saved text excerpt'));
-        sampleCard.append($('p', {style: 'white-space:pre-wrap;overflow-wrap:anywhere'}, entry.text));
+      const example = criticism?.evidence?.[entry.locator?.sample];
+      const excerpt = example?.text || entry.text;
+      if (example?.token_activations?.length) {
+        sampleCard.append(toks(example.token_activations, example.peak_index, null, example.activation < 0,
+          {left:example.cut_left, right:example.cut_right}));
+      } else if (excerpt) {
+        if (excerpt.startsWith('…') || excerpt.endsWith('…')) sampleCard.append($('p', {class: 'sub'}, 'Saved text excerpt'));
+        sampleCard.append($('p', {style: 'white-space:pre-wrap;overflow-wrap:anywhere'}, excerpt));
       }
-      Object.entries(entry.details || {}).forEach(([label, value]) => {
+      const details = entry.locator?.sample == null && criticism?.result
+        ? {...entry.details, result: criticism.result}
+        : entry.details;
+      Object.entries(details || {}).forEach(([label, value]) => {
         sampleCard.append(P($('b', null, label.replaceAll('_', ' ')), ' ', String(value)));
       });
       host.prepend(sampleCard);

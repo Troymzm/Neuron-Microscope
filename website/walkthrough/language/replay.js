@@ -56,13 +56,13 @@ function callGroup(id){
   return group==='followup'&&task==='report-synthesis'?'report-synthesis':group;
 }
 function synthesisPart(id){
-  return id.replace(/^followup\//,'').split('/').slice(1);
+  return id.replace(/^(?:followup\/)?report-synthesis\/(?:final-claim\/)?/,'').split('/');
 }
 function relevantCalls(step){
   const groups=callGroups[step]||[];
   const calls=groups.flatMap(group=>data.calls.filter(call=>callGroup(call.id)===group));
   if(step==='synthesis'){
-    const order={sections:0,findings:1,overview:2,'claim-overview':2};
+    const order={sections:0,'criticism-judgments':0,findings:1,overview:2,'claim-overview':2};
     const rank=call=>order[synthesisPart(call.id)[0]]??-1;
     return calls.sort((a,b)=>rank(a)-rank(b));
   }
@@ -99,6 +99,7 @@ function callName(call){
   if(group==='search')return 'Search · '+identity.split('-').pop();
   if(callGroup(call.id)==='report-synthesis'){
     const [part,field]=synthesisPart(call.id);
+    if(part==='criticism-judgments')return t('质疑的最终判断','Final criticism judgments');
     if(part==='sections')return t('章节摘要','Section summary')+' · '+(sectionTitles[field]||field);
     if(part==='findings')return t('综合结论','Finding')+' · '+(findingTitles[field]||field);
     if(part==='overview'||part==='claim-overview')return field==='title'?t('报告标题','Report title'):t('报告导语','Report lede');

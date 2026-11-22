@@ -1,7 +1,9 @@
 import copy
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
 from language.workflow import contracts
 from language.workflow.labels import plot_fields, predict
 from language.workflow.state import union_seconds
@@ -10,6 +12,30 @@ from language.workflow.state import write
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_followup_retry_uses_saved_investigations_after_report_failure(self):
+        from language.workflow import followups
+        from language.workflow.state import read
+
+        with tempfile.TemporaryDirectory() as tmp:
+            source, output = Path(tmp) / 'source', Path(tmp) / 'followup'
+            base = {'files': {}, 'initial': {}, 'predictions': [], 'original_criticism': [],
+                    'html': 'saved source', 'config': {'llm': {}, 'gpus': [0], 'api_slots': '', 'settings': {}}}
+            saved = {'rounds': [], 'stop_reason': 'no_new_distinguishable_questions'}
+            write(output / 'manifest.json', {'source': str(source.resolve()), 'files': {},
+                                             'options': followups.DEFAULTS, 'inputs': {}})
+            write(output / 'status.json', {'phase': 'failed'})
+            write(output / 'investigation.json', saved)
+            executor = Mock(side_effect=AssertionError('Saved investigations must skip the executor'))
+            with (patch.dict(os.environ), patch.object(followups, 'load_source', return_value=base),
+                  patch.object(followups, 'input_identity', return_value={}),
+                  patch.object(followups, '_render_saved_report', return_value=output / 'report') as render,
+                  patch.object(followups, '_finish_standalone', return_value=output / 'report')):
+                self.assertEqual(followups.run(source, output, client_factory=Mock(), executor_factory=executor),
+                                 output / 'report')
+            render.assert_called_once_with(base['html'], saved, output.resolve())
+            executor.assert_not_called()
+            self.assertEqual(read(output / 'status.json')['phase'], 'complete')
+
     def test_rule_limit_applies_to_each_pole_and_both_explanation_prompts(self):
         from language.workflow import prompts
         rules = [dict(id=f'{pole}-{i}', name='Context', description='Condition', predicted_pole=pole)

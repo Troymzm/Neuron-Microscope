@@ -157,38 +157,48 @@ console.log(JSON.stringify({tables: tables.length, columns: rows.map(row => row.
         self.assertIn("P($('b',null,'Verdict. '),original)",rendered)
         self.assertEqual(render(rendered),rendered)
 
-    def test_criticism_groups_and_numbers_preserve_every_result(self):
+    def test_criticism_uses_one_row_per_question_and_selects_linkable_evidence(self):
         import subprocess
         rows = [{'round': i, 'attack': f'Original {i}', 'verdict': 'narrowed',
-                 'prediction': 'Saved prediction', 'result': f'Saved result {i}', 'evidence': []}
-                for i in range(1, 6)]
+                 'prediction': 'Saved prediction', 'result': f'Saved result {i}',
+                 'evidence': [{'activation': i, 'text': f'Base evidence {i}'}]}
+                for i in range(1, 4)]
         rows += [{'round': r, 'investigation_id': f'r{r}-i{i}',
+                  'criticism_ids': ['C1', 'C2'],
                   'attack': f'Follow-up round {r}: Question {i}', 'verdict': 'survived',
-                  'prediction': 'Saved prediction', 'result': f'Saved result {r}.{i}', 'evidence': []}
-                 for r in (1, 2) for i in range(1, 6)]
-        code = 'const B={criticism:' + json.dumps(rows) + '};\n' + r"""
+                  'prediction': 'Saved prediction', 'result': f'Saved result {r}.{i}',
+                  'evidence': [{'id': 'sample', 'activation': -i, 'text': f'Round {r} sample {i}'}]}
+                 for r in (1, 2) for i in range(1, 3)]
+        rows[5]['evidence'][0].update(selected={'token': ' et', 'position': 4},
+                                      score={'location': 'replacement_span'})
+        findings = {'C1': {'verdict': 'rejected', 'conclusion': 'Final conclusion for C1',
+                           'evidence_ids': ['criticism:r2-i1:sample', 'criticism:original-1:1']}}
+        code = ('const B={criticism:' + json.dumps(rows) + '};\n'
+                'const findings=' + json.dumps(findings) + ';\n') + r"""
 const before=JSON.stringify(B), has=x=>!!x?.length;
 const $=(tag,attrs,...children)=>({tag,attrs:attrs||{},children:children.flat().filter(x=>x!=null)});
 const P=(...children)=>$('p',null,...children), tile=value=>$('span',null,value);
+const document={getElementById:()=>({textContent:JSON.stringify(findings)})};
 let output; const sec=(id,title,intro,body)=>{output=body;};
 """ + CRITICISM + r"""
 const walk=node=>typeof node==='object'?[node,...node.children.flatMap(walk)]:[];
 const text=node=>typeof node==='object'?node.children.map(text).join(''):String(node);
-const groups=walk(output).filter(node=>node.attrs.class==='criticism-group');
-console.log(JSON.stringify({unchanged:before===JSON.stringify(B),groups:groups.map(group=>({
-  heading:text(group.children[0]),numbers:walk(group).filter(n=>n.attrs.class==='n').map(text),
-  questions:walk(group).filter(n=>n.attrs.class==='att').map(text),
-  results:walk(group).filter(n=>n.attrs.class==='bodyc').map(text)}))}));
+const questions=walk(output).filter(node=>node.attrs.class==='crow');
+const displayed=questions.map(row=>({id:row.attrs['data-criticism-id'],summary:text(row.children[0]),
+  evidence:walk(row).filter(node=>'data-criticism-sample' in node.attrs).map(node=>
+    [node.attrs['data-criticism-row'],node.attrs['data-criticism-sample'],text(node)])}));
+console.log(JSON.stringify({unchanged:before===JSON.stringify(B), displayed}));
 """
         value=json.loads(subprocess.run(['node','-e',code],capture_output=True,text=True,check=True).stdout)
         self.assertTrue(value['unchanged'])
-        self.assertEqual([group['heading'] for group in value['groups']],
-                         ['Original Criticism5 items','Follow-up Round 15 items','Follow-up Round 25 items'])
-        self.assertEqual([group['numbers'] for group in value['groups']],
-                         [[f'C{i}' for i in range(1,6)], [f'1.{i}' for i in range(1,6)], [f'2.{i}' for i in range(1,6)]])
-        self.assertEqual(value['groups'][1]['questions'], [f'Question {i}' for i in range(1,6)])
-        for original, displayed in zip(rows, [text for group in value['groups'] for text in group['results']]):
-            self.assertIn(original['result'], displayed)
+        self.assertEqual([row['id'] for row in value['displayed']], ['C1', 'C2', 'C3'])
+        final, pending, baseline = value['displayed']
+        self.assertIn('rejectedOriginal 1Final conclusion for C1', final['summary'])
+        self.assertEqual(final['evidence'], [[5, 0, '-1Round 2 · r2-i1Round 2 sample 1'
+                                                   'Scored token " et" · position 4 (0-based) · replacement span'],
+                                             [0, 0, '1Original evidenceBase evidence 1']])
+        self.assertIn('Final judgment pending.', pending['summary'])
+        self.assertIn('narrowedOriginal 3Saved result 3', baseline['summary'])
         head='<script id="bundle">'+json.dumps({'criticism':rows})+'</script>\n'
         tail='// 9. Appendix.\nkeep_appendix();\nkeep_other_sections();\n'
         folding="  foldExtra([...document.querySelectorAll('#criticism .crow')], 8, 'Additional criticism rounds');\n"

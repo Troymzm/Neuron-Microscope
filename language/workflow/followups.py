@@ -87,9 +87,9 @@ def route_overlay(html, source, *, costs, load_steering_evidence=None):
     return page
 
 
-def integrate_report(report, source, *, in_place=True):
+def integrate_report(report, source, *, in_place=True, criticism_findings=None):
     """Replace report files atomically, without writing through publication hardlinks."""
-    if not in_place and not (source / 'neuron-labels/result.json').is_file():
+    if not in_place and not criticism_findings and not (source / 'neuron-labels/result.json').is_file():
         return report
     destination = source / 'report' if in_place else report
     html = (report / 'index.html').read_text(encoding='utf-8')
@@ -98,6 +98,11 @@ def integrate_report(report, source, *, in_place=True):
         html = route_overlay(html, source, costs=read(costs) if costs.exists() else None)
     from .neuron_labels import report_overlay
     html, bundle = report_overlay(html, source)
+    if criticism_findings is not None:
+        from report import update_criticism_findings
+        html = update_criticism_findings(html, criticism_findings)
+        if criticism_findings:
+            bundle['criticism_findings'] = criticism_findings
     contents = {'paper-data.json': (json.dumps({'bundle': bundle},
                                                ensure_ascii=False, indent=2) + '\n').encode('utf-8'),
                 'index.html': html.encode('utf-8')}
@@ -128,6 +133,15 @@ def _render_saved_report(base_html, result, root):
             if path.exists():
                 record['evidence'] = read(path)
     return render(base_html, display_rounds, root)
+
+
+def _finish_standalone(output, source, client, timeline, *, in_place):
+    from .report_synthesis import synthesize_criticism
+
+    bundle = read(output / 'paper-data.json')['bundle']
+    with timeline.span('criticism-findings', 'execution', 6):
+        findings = synthesize_criticism(client, bundle, 6)
+    return integrate_report(output, source, in_place=in_place, criticism_findings=findings)
 
 
 def run(source, root, options=None, *, in_place=False, client_factory=Client, executor_factory=Executor,
@@ -162,15 +176,17 @@ def run(source, root, options=None, *, in_place=False, client_factory=Client, ex
             write(marker, manifest)
         status = root / 'status.json'
         completed = status.exists() and read(status)['phase'] in ('complete', 'complete_with_failures')
+        archive = root / 'investigation.json'
         output = root / 'report'
         rendered = output / 'index.html'
         if completed:
             if not rendered.is_file():
-                _render_saved_report(base['html'], read(root / 'investigation.json'), root)
+                _render_saved_report(base['html'], read(archive), root)
             elif not (output / 'paper-data.json').is_file():
                 write(output / 'paper-data.json', {'bundle': json.loads(BUNDLE.search(rendered.read_bytes().decode('utf-8'))[2])})
         if in_place:
             from report import refresh_appendix, refresh_tests, strip_neuron_labels, strip_report_synthesis
+            from report_layout import refresh_criticism
             current_html = (source / 'report/index.html').read_bytes().decode('utf-8')
             current_html = strip_neuron_labels(strip_report_synthesis(current_html))
             current = current_html.encode('utf-8')
@@ -184,12 +200,12 @@ def run(source, root, options=None, *, in_place=False, client_factory=Client, ex
                 candidates = (page, legacy, base['html'])
                 if current_html not in candidates:
                     # Renderer upgrades can change saved HTML without changing any evidence.
-                    normalized = refresh_appendix(refresh_tests(current_html)).replace('\r\n', '\n')
+                    normalized = refresh_criticism(refresh_appendix(refresh_tests(current_html))).replace('\r\n', '\n')
                     steering = (bundle.get('tests') or {}).get('steering') or []
                     load_evidence = (lambda: base['steering_evidence']) if any(
                         row.get('baseline_context') for row in steering) else None
-                    if not any(normalized == refresh_appendix(route_overlay(
-                            candidate, source, costs=costs, load_steering_evidence=load_evidence)).replace('\r\n', '\n')
+                    if not any(normalized == refresh_criticism(refresh_appendix(route_overlay(
+                            candidate, source, costs=costs, load_steering_evidence=load_evidence))).replace('\r\n', '\n')
                                for candidate in candidates):
                         raise ValueError('Current report changed outside this follow-up investigation')
             if not foundation.exists():
@@ -203,19 +219,22 @@ def run(source, root, options=None, *, in_place=False, client_factory=Client, ex
         os.environ['NEURON_MICROSCOPE_SETTINGS'] = str(root / 'backend-settings.json')
         write(root / 'backend-settings.json', config['settings'])
         try:
-            if completed:
-                if workflow_timeline is not None:
-                    workflow_timeline.status('followup', step='restoring-report')
-                    return output
-                return integrate_report(output, source, in_place=in_place)
+            if completed and workflow_timeline is not None:
+                workflow_timeline.status('followup', step='restoring-report')
+                return output
             client = client_factory(config['llm'], root / 'api', config['api_slots'])
-            with executor_factory(config, root / 'measurements', timeline, options,
-                                  base['excluded_documents']) as executor:
-                result = rounds(client, executor, base, root, options, timeline)
-            write(root / 'investigation.json', result)
+            if completed:
+                return _finish_standalone(output, source, client, timeline, in_place=in_place)
+            if archive.is_file():
+                result = read(archive)
+            else:
+                with executor_factory(config, root / 'measurements', timeline, options,
+                                      base['excluded_documents']) as executor:
+                    result = rounds(client, executor, base, root, options, timeline)
+                write(archive, result)
             output = _render_saved_report(base['html'], result, root)
             if workflow_timeline is None:
-                output = integrate_report(output, source, in_place=in_place)
+                output = _finish_standalone(output, source, client, timeline, in_place=in_place)
             failures = sum(record['status'] == 'failed' for current in result['rounds']
                            for record in current['investigations'])
             timeline.status('complete_with_failures' if failures else 'complete',

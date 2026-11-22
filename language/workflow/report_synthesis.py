@@ -2,7 +2,7 @@
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
-from . import prompts
+from . import contracts, prompts
 
 
 def _fields(row, *names):
@@ -274,7 +274,66 @@ FINDING_SECTIONS = {
 }
 
 
-def synthesize(client, bundle, stage):
+def synthesize_criticism(client, bundle, stage):
+    """Judge each investigated original question against its linked saved evidence."""
+    rows = bundle.get('criticism') or []
+    if not any(row.get('investigation_id') for row in rows):
+        return {}
+
+    cases, _ = _evidence({'criticism': rows})
+    sources = defaultdict(dict)
+    for identity, case in cases.items():
+        sources[case['locator']['row']][identity] = case
+
+    questions = {}
+    followups = []
+    for index, row in enumerate(rows):
+        identity = row.get('investigation_id') or f'original-{index + 1}'
+        summary_id = f'criticism:{identity}'
+        saved_cases = sources[index]
+        summary = saved_cases[summary_id]['details']
+        evidence = {key: _prompt_case(case) for key, case in saved_cases.items() if key != summary_id}
+        if not evidence:
+            evidence[summary_id] = _prompt_case(saved_cases[summary_id])
+        result = (summary.get('result') or '').split('\nSuggested revision:', 1)[0].split('\nEvidence:', 1)[0]
+        source = {**_fields(row, 'attack', 'prediction', 'suggested_revision'), 'id': identity,
+                  'verdict': summary['verdict'], 'result': result, 'evidence': evidence}
+        if row.get('investigation_id'):
+            followups.append((row.get('criticism_ids') or [], {**source, 'round': row.get('round')}))
+        else:
+            questions[f'C{len(questions) + 1}'] = {'original': source, 'followups': []}
+
+    for linked_ids, source in followups:
+        for identity in dict.fromkeys(linked_ids):
+            if identity in questions:
+                questions[identity]['followups'].append(source)
+    investigated = {identity: question for identity, question in questions.items() if question['followups']}
+    if not investigated:
+        return {}
+
+    conclusion = {'type': 'string', 'minLength': 1, 'maxLength': 480}
+    schemas = {}
+    for identity, question in investigated.items():
+        evidence_ids = dict.fromkeys(key for source in [question['original'], *question['followups']]
+                                    for key in source['evidence'])
+        schemas[identity] = contracts.obj(
+            verdict=contracts.string('survived', 'narrowed', 'rejected', 'inconclusive'), conclusion=conclusion,
+            evidence_ids=contracts.arr(contracts.string(*evidence_ids), 1, 3))
+
+    def check(output):
+        for identity, judgment in output.items():
+            if not judgment['conclusion'].strip() or len(judgment['conclusion'].splitlines()) != 1:
+                raise ValueError(f'{identity}: conclusion must be a nonempty single paragraph')
+            cited = judgment['evidence_ids']
+            if len(set(cited)) != len(cited):
+                raise ValueError(f'{identity}: cite each evidence ID only once')
+
+    packet = {'neuron': bundle.get('neuron'), 'frozen_claim': bundle.get('claim'), 'questions': investigated}
+    return client.request('report-synthesis/criticism-judgments', prompts.CRITICISM_JUDGMENTS,
+                          packet, contracts.obj(**schemas), stage, check)
+
+
+def synthesize(client, bundle, stage, *, criticism_findings=None):
     cases, measurements = _evidence(bundle)
     if not cases:
         return None
@@ -282,6 +341,9 @@ def synthesize(client, bundle, stage):
     sections = sorted({case['section'] for case in cases.values()})
     references = {section: _section_cases(section, {key: case for key, case in cases.items()
                                                    if case['section'] == section}) for section in sections}
+    if criticism_findings:
+        references['criticism'] = {key: cases[key] for judgment in criticism_findings.values()
+                                   for key in judgment['evidence_ids']}
 
     def fill(section_names, slot, prompt, references, **content):
         metrics = dict.fromkeys(key for section in section_names for key in SECTION_MEASUREMENTS.get(section, ()))
@@ -290,20 +352,28 @@ def synthesize(client, bundle, stage):
         return client.request_text(f'report-synthesis/{slot}', prompt, packet, stage)
 
     def section_slot(section):
+        if section == 'criticism' and criticism_findings:
+            return {'summary': ' '.join(judgment['conclusion'] for judgment in criticism_findings.values())}
         prose = fill((section,), f'sections/{section}', prompts.REPORT_SECTION_SLOT,
                      references[section], section=section)
         return {'summary': prose}
 
+    claim_slot = 'final-claim/' if criticism_findings else ''
+
     def finding_slot(kind):
         scope = [section for section in FINDING_SECTIONS[kind] if section in section_prose]
         selected = {key: case for section in scope for key, case in _contrasts(references[section]).items()}
-        prose = fill(scope, f'findings/{kind}', prompts.REPORT_FINDING_SLOT, selected,
+        prompt = prompts.REPORT_FINDING_SLOT
+        if criticism_findings:
+            prompt += ('\nThe Criticism section contains the final judgments for its original questions. '
+                       'Use those scope limits when restating an earlier interpretation.')
+        prose = fill(scope, f'{claim_slot}findings/{kind}', prompt, selected,
                      focus=prompts.REPORT_FINDING_SLOTS[kind],
                      section_summaries={section: section_prose[section]['summary'] for section in scope})
         return {'text': prose, 'evidence_ids': list(selected)}
 
     def overview_slot(key, prompt):
-        return client.request_text(f'report-synthesis/claim-overview/{key}', prompt, overview, stage)
+        return client.request_text(f'report-synthesis/{claim_slot}claim-overview/{key}', prompt, overview, stage)
 
     with ThreadPoolExecutor(max_workers=5) as pool:
         section_prose = dict(zip(sections, pool.map(section_slot, sections)))

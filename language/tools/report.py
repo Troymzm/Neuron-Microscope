@@ -20,6 +20,7 @@ NEURON_LABEL_HOOK = re.compile(r'/\* neuron-labels:start \*/.*?/\* neuron-labels
 REPORT_SYNTHESIS = re.compile(
     r'<script id="report-synthesis" type="application/json">(?P<data>.*?)</script>'
     r'<script id="report-synthesis-render">.*?</script>', re.S)
+CRITICISM_FINDINGS = re.compile(r'<script id="criticism-findings" type="application/json">.*?</script>', re.S)
 REPORT_TEMPLATE = Path(__file__).resolve().parents[1] / 'analysis/report.html'
 
 
@@ -170,12 +171,30 @@ def with_neuron_labels(source, bundle):
 
 def strip_report_synthesis(source):
     """Recover the report that was used to generate its synthesis."""
-    return REPORT_SYNTHESIS.sub('', source, count=1)
+    return CRITICISM_FINDINGS.sub('', REPORT_SYNTHESIS.sub('', source, count=1), count=1)
+
+
+def update_criticism_findings(source, findings):
+    """Render one final judgment per investigated criticism without rewriting its evidence."""
+    if __package__:
+        from .report_layout import refresh_criticism
+    else:
+        from report_layout import refresh_criticism
+
+    source = refresh_criticism(CRITICISM_FINDINGS.sub('', source, count=1))
+    if not findings:
+        return source
+    bundle = BUNDLE.search(source)
+    if bundle is None:
+        raise ValueError('Missing report bundle for Criticism')
+    script = f'<script id="criticism-findings" type="application/json">{encode_bundle(findings)}</script>'
+    return source[:bundle.start()] + script + source[bundle.start():]
 
 
 def update_report_synthesis(source, synthesis):
     """Display the measured synthesis as a reversible report overlay."""
-    head, closing, tail = refresh_appendix(strip_report_synthesis(source)).partition('</body>')
+    source = update_criticism_findings(strip_report_synthesis(source), synthesis.get('criticism_findings'))
+    head, closing, tail = refresh_appendix(source).partition('</body>')
     renderer = Path(__file__).with_name('report_synthesis.js').read_text(encoding='utf-8')
     if synthesis.get('peak_census') and not re.search(r'^function combinedPeakCensus\(', head, re.M):
         template = REPORT_TEMPLATE.read_text(encoding='utf-8')
@@ -185,7 +204,10 @@ def update_report_synthesis(source, synthesis):
     scripts = (f'<script id="report-synthesis" type="application/json">{encode_bundle(synthesis)}</script>'
                f'<script id="report-synthesis-render">{renderer}</script>')
     page = head + scripts + closing + tail
-    return page, with_neuron_labels(page, source_bundle(page)[0])
+    bundle = with_neuron_labels(page, source_bundle(page)[0])
+    if findings := synthesis.get('criticism_findings'):
+        bundle['criticism_findings'] = findings
+    return page, bundle
 
 
 def replace_anatomy_pair(source, pair):

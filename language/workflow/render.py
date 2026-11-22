@@ -214,7 +214,7 @@ def finalize_report(root, result, config, *, followup):
     from report import strip_report_synthesis
     from .client import Client
     from .neuron_labels import report_overlay
-    from .report_synthesis import synthesize
+    from .report_synthesis import synthesize, synthesize_criticism
 
     followup_root = root / 'followup'
     foundation = followup_root / 'foundation.html'
@@ -231,7 +231,10 @@ def finalize_report(root, result, config, *, followup):
     timeline = Timeline(root)
     timeline.status('report-synthesis')
     with timeline.span('report-synthesis', 'execution', stage):
-        synthesis = synthesize(client, bundle, stage)
+        findings = synthesize_criticism(client, bundle, stage) if followup else {}
+        synthesis = synthesize(client, bundle, stage, criticism_findings=findings)
+        if synthesis is not None and findings:
+            synthesis['criticism_findings'] = findings
     # A completed run may still render from its frozen, pre-census report.
     signed_fields = ('peak_census', 'peak_census_negative')
     census = {key: bundle[key] for key in signed_fields if bundle.get(key)}
