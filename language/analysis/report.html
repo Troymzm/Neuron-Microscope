@@ -872,9 +872,40 @@ let SPEC_COLOUR = {};
           $('td', null, row.predicted_route == null ? 'Not predicted' : routeLabel(row.predicted_route)), $('td', null, routeLabel(row.actual_route)),
           $('td', null, row.correct === true ? 'Correct' : row.correct === false ? 'Incorrect' : 'Unscored'))))))) : null;
     figs.push(fig($('div', null, box, samples), notes.join(' '))); }
-  if (has(T.steering)) { const s = Math.max(...T.steering.flatMap(x => [Math.abs(x.baseline || 0), Math.abs(x.steered || 0)]), 1e-9);
-    figs.push(fig($('div', null, $('div', { class: 'sub' }, 'Steering'), $('table', null, $('tr', null, $('th', null, 'Prompt'), $('th', { style: 'text-align:right' }, 'Strength'), $('th', { style: 'text-align:right' }, 'Baseline'), $('th', { style: 'text-align:right' }, 'Steered'), $('th', null, 'Note')),
-      T.steering.map(x => $('tr', null, $('td', null, $('span', { class: 'toks' }, x.prompt)), $('td', { class: 'num' }, fmt(x.strength)), $('td', { class: 'num' }, tile(x.baseline, { signed: true, scale: s })), $('td', { class: 'num' }, tile(x.steered, { signed: true, scale: s })), $('td', { style: 'color:var(--ink2);font-size:13.5px' }, x.note || ''))))), 'Baseline and steered values are the measured quantity named in each note.')); }
+  if (has(T.steering)) {
+    const rows = T.steering.map(row => {
+      const prompt = row.prompt || '', edit = row.edit, source = row.activation_context;
+      const baseline = row.baseline_context, example = baseline || source;
+      const position = edit?.position ?? example?.peak_index;
+      const tokens = example?.token_activations || [];
+      const canShade = typeof foldedExample === 'function' && Number.isInteger(position)
+        && position >= 0 && position < tokens.length && position === example.peak_index;
+      const context = canShade
+        ? foldedExample(example, Math.max(...tokens.map(t => Math.abs(t.activation || 0)), 1e-9),
+            tokens[position].activation < 0, null, 24)
+        : $('details', null, $('summary', null, prompt.slice(-160) || 'Show full input'), $('div', { class: 'toks' }, prompt));
+      if (canShade && tokens.slice(0, position + 1).map(t => t.token).join('') !== prompt) {
+        context.append($('div', { class: 'quiet' }, 'Exact model input'), $('div', { class: 'toks' }, prompt));
+      }
+      if (baseline && source?.text?.startsWith(prompt) && source.text.length > prompt.length) {
+        context.append($('div', { class: 'quiet' }, 'Source continuation after the input'),
+          $('div', { class: 'toks' }, source.text.slice(prompt.length)));
+      }
+      const scope = canShade && !baseline ? 'Shading shows the saved source trace. The measured input ends at the outline.' : '';
+      const change = Number.isFinite(edit?.before) && Number.isFinite(edit?.after)
+        ? `Intervention activation: ${fmt(edit.before)} → ${fmt(edit.after)}.` : '';
+      const probability = Number.isInteger(row.reference_token_id) || (row.note || '').startsWith('Next-token probability');
+      const value = n => !Number.isFinite(n) ? '–' : probability ? `${(100 * n).toFixed(2)}%` : fmt(n);
+      return $('tr', null, $('td', null, context, $('div', { class: 'quiet' }, [scope, row.note, change].filter(Boolean).join(' '))),
+        $('td', { class: 'num' }, fmt(row.strength)),
+        $('td', { class: 'num' }, tile(row.baseline, { text: value(row.baseline) })),
+        $('td', { class: 'num' }, tile(row.steered, { text: value(row.steered) })));
+    });
+    figs.push(fig($('div', null, $('div', { class: 'sub' }, 'Steering'),
+      $('table', { class: 'steering-table' },
+        $('tr', null, ['Input', 'Strength', 'Baseline', 'Steered'].map(label => $('th', { scope: 'col' }, label))), rows)),
+      'Shaded inputs outline the edited token. For next-token probabilities, both columns track the same candidate named in the input note.'));
+  }
   if (has(T.ablation)) { const s = Math.max(...T.ablation.map(x => Math.abs(x.effect || 0)), 1e-9);
     figs.push(fig($('div', null, $('div', { class: 'sub' }, 'Ablation'), $('table', null, $('tr', null, $('th', null, 'Graph'), $('th', { style: 'text-align:right' }, 'Effect'), $('th', null, 'Note')), T.ablation.map(x => $('tr', null, $('td', { class: 'id' }, x.graph_id), $('td', { class: 'num' }, tile(x.effect, { signed: true, scale: s, d: 2 })), $('td', { style: 'color:var(--ink2);font-size:13.5px' }, x.note || ''))))), 'Effect of zeroing the unit on each graph’s target, as measured.')); }
   if (!figs.length) return; sec({ id: 'tests', wide: true }, 'Tests', [P('Predictions checked against measured responses and saved attributions. Blind max and min ask whether text written from the explanation alone can reach the corpus extremes.')], figs); })();
@@ -887,13 +918,60 @@ let SPEC_COLOUR = {};
   sec('criticism', 'Criticism', [P('Each round, a critic tries to break the claim. The verdict records whether the claim survived as written, was narrowed, or was rejected. Open a row for the result and evidence.')], $('div', null, rows)); })();
 
 // 9. Appendix.
-(() => { const A = B.appendix || {}; const parts = [];
-  const absolute = peakCensusFigure(B.peak_census_absolute, 'Absolute peak census');
-  if (absolute) parts.push($('details', null, $('summary', null, 'Absolute peak census'), absolute));
-  if (has(A.notes)) parts.push($('details', null, $('summary', null, 'Notes'), $('ul', null, A.notes.map(n => $('li', null, n)))));
-  if (has(V.history)) parts.push($('details', null, $('summary', null, 'Version history'), $('ul', null, V.history.map(h => $('li', null, `v${h.n} · ${(h.ts || '').slice(0, 16).replace('T', ' ')} · ${h.note || ''}`)))));
-  if (has(A.provenance)) parts.push($('details', null, $('summary', null, 'Provenance'), $('ul', null, A.provenance.map(n => $('li', null, n)))));
-  if (!parts.length) return; sec('appendix', 'Appendix', [P('Nuance, caveats and where every number came from.')], $('div', null, parts)); })();
+(() => {
+  const appendix = B.appendix || {};
+  const list = (title, items, intro) => {
+    const rows = items.filter(Boolean);
+    return rows.length ? $('details', null, $('summary', null, title),
+      intro ? P(intro) : null, $('ul', null, rows.map(row => $('li', null, row)))) : null;
+  };
+  const link = (id, label) => document.getElementById(id) ? $('a', {href: '#' + id}, label) : label;
+  const figures = Array.isArray(B.custom) ? B.custom : B.custom?.figures || [];
+  const investigations = (B.criticism || []).filter(row => row.investigation_id);
+  const route = B.tests?.route_prediction;
+  const ablations = B.ablation?.rows?.length;
+  const controls = B.ablation?.summary?.controls?.length;
+  const graphs = B.graphs_curated?.picks?.length;
+  const tokens = B.distribution?.n_tokens;
+  const documents = B.local_metadata?.population_documents ?? B.bigscan?.n_docs;
+  const notes = list('Notes', [...(appendix.notes || []),
+    figures.length ? [link('custom', 'Controlled figures'), ` document ${figures.length} comparisons and their scoring rules.`] : null,
+    investigations.length ? [link('criticism', 'Criticism'), ` records ${investigations.length} follow-up investigations across ${new Set(investigations.map(row => row.round)).size} rounds.`] : null,
+    route?.train_n > 0 && route?.test_n > 0
+      ? [link('tests', 'Route prediction'), ` uses ${route.train_n} training and ${route.test_n} held-out examples${route.baseline_route_id ? ', with the most frequent training route as the baseline' : ''}.`] : null,
+    controls ? [link('ablation', 'Ablation'), ` compares next-token distribution changes against ${controls} same-layer control neurons.`] : null,
+  ]);
+  const savedHistory = list('Version history', (V.history || []).map(h =>
+    [h.n != null ? 'v' + h.n : '', (h.ts || '').slice(0, 16).replace('T', ' '), h.note].filter(Boolean).join(' · ')));
+  const provenance = list('Provenance', [...(appendix.provenance || []),
+    N.model ? `Measurements use ${N.model}${N.id ? ' · ' + N.id : ''}.` : null,
+    Number.isFinite(tokens) ? [link('distribution', 'Corpus measurements'),
+      ` cover ${tokens.toLocaleString()} token positions${Number.isFinite(documents) ? ' in ' + documents.toLocaleString() + ' documents' : ''}.`] : null,
+    graphs ? [link('graphs', 'RelP examples'), ` show ${graphs} selected attribution graphs.`] : null,
+    ablations ? [link('ablation', 'Ablation results'), ` contain ${ablations} saved intervention cases.`] : null,
+  ]);
+  const census = typeof peakCensusFigure === 'function' ? peakCensusFigure(B.peak_census_absolute) : null;
+  const absolute = census ? $('details', null, $('summary', null, 'Absolute peak census'), census) : null;
+  const body = $('div', null, notes, savedHistory, provenance, absolute);
+  const mount = () => sec('appendix', 'Appendix', [P('Open the notes and sources for the measurements in this report.')], body);
+  if (body.childElementCount) mount();
+  if (!savedHistory) document.addEventListener('DOMContentLoaded', () => {
+    const synthesis = document.getElementById('report-synthesis');
+    const history = synthesis ? JSON.parse(synthesis.textContent).interpretation_history : null;
+    const percent = value => (100 * value).toFixed(1) + '%';
+    const versions = list('Version history', (history || []).map(row => [
+      row.round ? 'Refinement ' + row.round : 'Initial explanation',
+      row.selected ? 'selected explanation' : '',
+      Number.isFinite(row.labelled) && Number.isFinite(row.requested) ? `${row.labelled}/${row.requested} labelled` : '',
+      Number.isFinite(row.directional_accuracy) ? percent(row.directional_accuracy) + ' directional accuracy' : '',
+      Number.isFinite(row.directional_coverage) ? percent(row.directional_coverage) + ' directional coverage' : '',
+    ].filter(Boolean).join(' · ')), 'Accuracy and coverage use the samples that guided interpretation selection.');
+    if (versions) {
+      body.insertBefore(versions, provenance || absolute);
+      if (!body.isConnected) mount();
+    }
+  }, {once: true});
+})();
 </script>
 <!-- paper-review:start --><style>
 .pr-box{border:1px solid var(--rule2,#d9dde0);border-radius:8px;padding:14px 18px 12px;margin:0 0 26px;background:#fafbfb;font-size:15px;line-height:1.5;color:var(--ink,#1f2328)}

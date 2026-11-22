@@ -9,6 +9,7 @@ from pathlib import Path
 BUNDLE = re.compile(r'(<script\b(?=[^>]*\bid=["\x27]bundle["\x27])[^>]*>)(.*?)(</script>)', re.S)
 EFFECT = re.compile(r'// 5b\. What it does:.*?(?=// 5c\. Where it sits:)', re.S)
 TESTS = re.compile(r'// 7\. Tests\..*?(?=// 8\. Criticism[.:])', re.S)
+APPENDIX = re.compile(r'// 9\. Appendix\.\s*\(\(\) => \{.*?\}\)\(\);', re.S)
 ANATOMY_PAIR = re.compile(r'// Task 3 paired Anatomy renderer\..*?// End paired Anatomy renderer\.', re.S)
 ANATOMY_INTRO = re.compile(r"(sec\(\{ id: 'anatomy', wide: true \}, 'Inside the neuron', \[P\(')([^']+)(')")
 NEURON_LABEL_SCRIPTS = re.compile(
@@ -35,7 +36,29 @@ def refresh_effect(source):
 
 def refresh_tests(source):
     """Refresh only the Tests renderer in a saved report."""
-    return _refresh_renderer(source, TESTS, 'a Tests')
+    from exemplar_display import install
+    return install(_refresh_renderer(source, TESTS, 'a Tests'))
+
+
+def refresh_appendix(source):
+    """Restore the shared Appendix for reports rendered with the old placeholder."""
+    if APPENDIX.search(source) is None:
+        return source
+    return _refresh_renderer(source, APPENDIX, 'an Appendix')
+
+
+def with_steering_baselines(tests, evidence):
+    """Pair recorded interventions with exact prefix traces by input and measured anchor."""
+    if not tests.get('steering') or not evidence:
+        return tests
+    contexts = {(entry.get('text'), entry.get('peak_index'), entry.get('activation')): entry
+                for key, entry in evidence.items() if key.startswith('graph-') and entry.get('token_activations')}
+    rows = []
+    for row in tests['steering']:
+        edit = row.get('edit') or {}
+        context = contexts.get((row.get('prompt'), edit.get('position'), edit.get('before')))
+        rows.append({**row, 'baseline_context': context} if context and not row.get('baseline_context') else row)
+    return {**tests, 'steering': rows}
 
 
 def encode_bundle(bundle):
@@ -152,7 +175,7 @@ def strip_report_synthesis(source):
 
 def update_report_synthesis(source, synthesis):
     """Display the measured synthesis as a reversible report overlay."""
-    head, closing, tail = strip_report_synthesis(source).partition('</body>')
+    head, closing, tail = refresh_appendix(strip_report_synthesis(source)).partition('</body>')
     renderer = Path(__file__).with_name('report_synthesis.js').read_text(encoding='utf-8')
     if synthesis.get('peak_census') and not re.search(r'^function combinedPeakCensus\(', head, re.M):
         template = REPORT_TEMPLATE.read_text(encoding='utf-8')
@@ -211,7 +234,7 @@ def route_prediction_execution(result):
     return execution
 
 
-def update_route_prediction(source_html, result, *, interpretation_costs=None):
+def update_route_prediction(source_html, result, *, interpretation_costs=None, load_steering_evidence=None):
     """Add saved-attribution predictions while preserving the rest of the report."""
     matches = list(BUNDLE.finditer(source_html))
     if len(matches) != 1:
@@ -222,6 +245,8 @@ def update_route_prediction(source_html, result, *, interpretation_costs=None):
     execution = dict(tests.get('execution') or {})
     execution['route_prediction'] = route_prediction_execution(result)
     tests['execution'] = execution
+    if load_steering_evidence and any(not row.get('baseline_context') for row in tests.get('steering') or []):
+        tests = with_steering_baselines(tests, load_steering_evidence())
     bundle['tests'] = tests
     apply_route_descriptions(bundle, result)
     if interpretation_costs is not None:
@@ -279,7 +304,7 @@ def strip_capture_table(source):
 
 
 def presentation(source):
-    """Shared report layout; short verdict badges, readable challenges and blank Appendix."""
+    """Apply the shared layout to the investigation report."""
     source = show_criticism_nav(source).replace("['Neuron paper',", "['Neuron report',")
     style = """<style id="neuron-paper-layout">
 #criticism .crow > summary .pill{max-width:100%;white-space:nowrap}
@@ -289,12 +314,7 @@ def presentation(source):
 }
 </style>"""
     source = re.sub(r'<style id="neuron-paper-layout">.*?</style>', '', source, flags=re.S)
-    source = source.replace('</head>', style + '\n</head>', 1)
-    appendix = """// 9. Appendix.
-(() => { sec('appendix','Appendix',null,$('span',{class:'tile'},'—')); })();"""
-    source = re.sub(r'// 9\. Appendix\.\s*\(\(\) => \{.*?\}\)\(\);',
-                    lambda match: appendix, source, count=1, flags=re.S)
-    return source
+    return refresh_appendix(source.replace('</head>', style + '\n</head>', 1))
 
 def readable_data_scripts(source):
     """Format embedded JSON data with indentation."""
@@ -338,13 +358,15 @@ def merge(source, patches):
             values.extend(example.get('activation') for example in cluster['examples'])
             return max(abs(value or 0) for value in values)
         bundle['clusters'] = sorted(clusters, key=cluster_strength, reverse=True)
-    if (bundle.get('tests') or {}).get('route_prediction') is not None:
-        tests = copy.deepcopy(bundle['tests'])
-        result = tests['route_prediction']
+    tests = bundle.get('tests') or {}
+    result = tests.get('route_prediction')
+    if result is not None:
+        tests = copy.deepcopy(tests)
         tests['execution'] = {**(tests.get('execution') or {}),
                               'route_prediction': route_prediction_execution(result)}
         bundle['tests'] = tests
         apply_route_descriptions(bundle, result)
+    if result is not None or tests.get('steering'):
         source = refresh_tests(source)
     bundle['neuron']={k:v for k,v in bundle.get('neuron',{}).items()
                       if k not in ['autointerp_label','autointerp_description']}

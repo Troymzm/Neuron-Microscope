@@ -291,25 +291,6 @@ GRAPH_HELPERS = r"""// Graph context display: label attributed positions and ret
   };
 """
 
-STEERING = r"""  if (has(T.steering)) {
-    const s=Math.max(...T.steering.flatMap(x=>[Math.abs(x.baseline||0),Math.abs(x.steered||0)]),1e-9);
-    const rows=T.steering.map(x=>{
-      const e=x.activation_context;
-      const context=e ? foldedExample(e,Math.max(...e.token_activations.map(t=>Math.abs(t.activation||0)),1e-9),
-        e.activation<0,null,24) : $('details',null,$('summary',null,String(x.prompt||'').slice(-160)),P(x.prompt||''));
-      return $('tr',null,$('td',null,context,x.note ? $('div',{class:'quiet'},x.note) : null),
-        $('td',{class:'num'},fmt(x.strength)),
-        $('td',{class:'num'},tile(x.baseline,{signed:true,scale:s})),
-        $('td',{class:'num'},tile(x.steered,{signed:true,scale:s})));
-    });
-    figs.push(fig($('div',null,$('div',{class:'sub'},'Steering'),
-      $('table',{class:'steering-table'},$('tr',null,$('th',null,'Input'),$('th',null,'Strength'),
-        $('th',null,'Baseline'),$('th',null,'Steered')),rows)),
-      'Baseline and steered values are the measured quantity named in each note. Input shading shows the measured native neuron activation.'));
-  }
-"""
-
-
 def graph_display(source):
     start=source.find('// 0c. Three graphs:')
     stop=source.find('// 1. Distribution:',start)
@@ -471,8 +452,6 @@ def render(source):
                     source,count=1,flags=re.S)
     source = refresh_criticism(source)
     source = source.replace("has(K) ? 'Clusters' : 'Routes'", "'Clusters'")
-    source = re.sub(r'  if \(has\(T\.steering\)\) \{.*?(?=  if \(has\(T\.ablation\)\))',
-                    lambda m:STEERING,source,count=1,flags=re.S)
     source = source.replace("circuit:['Circuit',['Upstream','Downstream','Logits']]",
                             "circuit:['Circuit',['Upstream','Downstream']]")
     source = source.replace(

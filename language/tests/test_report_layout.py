@@ -59,6 +59,90 @@ class LayoutTests(unittest.TestCase):
         result=subprocess.run(['node','-e',code],capture_output=True,text=True,check=True)
         self.assertEqual(json.loads(result.stdout),[33,32,'318',90,500])
 
+    def test_route_refresh_keeps_foldable_steering_and_saved_measurements(self):
+        import subprocess
+        from report import REPORT_TEMPLATE, TESTS, merge, source_bundle, update_route_prediction
+
+        rows = [
+            {'prompt': 'Prefix ', 'strength': 2, 'baseline': .9883, 'steered': .9971,
+             'note': "Next-token probability of '3'.",
+             'edit': {'position': 1, 'before': -40, 'after': -80},
+             'activation_context': {'text': 'Prefix continuation', 'activation': -40, 'peak_index': 1,
+                                    'token_activations': [{'token': 'Prefix', 'activation': 12},
+                                                          {'token': ' ', 'activation': -40},
+                                                          {'token': 'continuation', 'activation': 4}]}},
+            {'prompt': 'Measured ', 'strength': 2, 'baseline': .73, 'steered': .91,
+             'reference_token_id': 33, 'edit': {'position': 1, 'before': 50, 'after': 100},
+             'activation_context': {'text': 'Measured source suffix', 'activation': 42, 'peak_index': 1,
+                                    'token_activations': [{'token': 'Measured', 'activation': 20},
+                                                          {'token': ' ', 'activation': 42},
+                                                          {'token': 'source suffix', 'activation': 7}]}},
+            {'prompt': 'Legacy input', 'strength': 2, 'baseline': .23, 'steered': .4},
+        ]
+        exact = {'text': 'Measured ', 'activation': 50, 'peak_index': 1,
+                 'token_activations': [{'token': 'Measured', 'activation': 30}, {'token': ' ', 'activation': 50}]}
+        evidence = {'graph-1': {**rows[0]['activation_context'], 'text': 'Prefix ', 'activation': -41},
+                    'graph-2': exact}
+        template = REPORT_TEMPLATE.read_text(encoding='utf-8')
+        original = {'neuron': {'id': 'L1_N2'}, 'distribution': {'n_tokens': 100}, 'tests': {'steering': rows}}
+        initial, _ = merge(template.replace('__PAPER_DATA_bundle__', json.dumps(original)), {})
+        route = {'n': 1, 'accuracy': 1, 'rows': [{'id': 'saved', 'correct': True}]}
+        refreshed, _ = update_route_prediction(initial, route, load_steering_evidence=lambda: evidence)
+        page, bundle = update_route_prediction(refreshed, route, load_steering_evidence=lambda: evidence)
+        self.assertEqual(page, refreshed)
+        self.assertEqual(bundle['tests']['steering'], [rows[0], {**rows[1], 'baseline_context': exact}, rows[2]])
+        self.assertEqual(source_bundle(page)[0]['tests']['route_prediction'], route)
+
+        helpers = page[page.index('const POS ='):page.index('// Render the first n items')]
+        folding = page[page.index('// Exemplar display context:'):page.index('// 2. Exemplars')]
+        code = r"""
+class Element {
+  constructor(tag) { this.tag = tag; this.children = []; this.style = {}; this.nodeType = 1; }
+  append(...kids) { this.children.push(...kids); }
+  setAttribute(name, value) { this[name] = value; }
+  addEventListener(name, handler) { this[name] = handler; }
+}
+const document = {createElement: tag => new Element(tag), createTextNode: text => ({nodeType: 3, text})};
+const walk = node => [node, ...(node.children || []).flatMap(walk)];
+const text = node => node.text ?? (node.children || []).map(text).join('');
+const fig = node => node, P = (...nodes) => $('p', null, ...nodes);
+let figures;
+const sec = (_id, _title, _intro, parts) => { figures = parts; };
+""" + 'const B = ' + json.dumps(bundle) + ';\n' + helpers + folding + TESTS.search(page)[0] + r"""
+const tables = figures.flatMap(walk).filter(node => node.className === 'steering-table');
+const rows = (tables[0] ? walk(tables[0]) : []).filter(node => node.tag === 'tr');
+const details = rows.slice(1).map(row => {
+  const input = row.children[0], fold = walk(input).find(node => node.tag === 'details');
+  const summary = fold?.children.find(node => node.tag === 'summary');
+  const peak = summary && walk(summary).find(node => node.className?.split(' ').includes('peak'));
+  const preview = summary && text(summary);
+  if (fold?.toggle) { fold.open = true; fold.toggle(); }
+  return {peak: peak && [text(peak), !!peak.style.background, peak.title], preview,
+    opened: fold?.children.filter(node => node !== summary).map(text).join(''),
+    input: text(input), values: row.children.slice(1).map(text)};
+});
+console.log(JSON.stringify({tables: tables.length, columns: rows.map(row => row.children.length), details,
+  route: figures.some(figure => text(figure).includes('Inspect 1 predictions'))}));
+"""
+        result = subprocess.run(['node', '-'], input=code, capture_output=True, text=True, encoding='utf-8', check=True)
+        displayed = json.loads(result.stdout)
+        self.assertEqual(displayed['tables'], 1)
+        self.assertEqual(displayed['columns'], [4, 4, 4, 4])
+        source, measured, legacy = displayed['details']
+        self.assertEqual(source['peak'], [' ', True, '-40'])
+        self.assertIn('Show full context', source['preview'])
+        self.assertNotIn('continuation', source['preview'])
+        self.assertIn('continuation', source['opened'])
+        self.assertIn('saved source trace', source['input'])
+        self.assertEqual(source['values'], ['2', '98.83%', '99.71%'])
+        self.assertEqual(measured['peak'], [' ', True, '50'])
+        self.assertNotIn('source suffix', measured['preview'])
+        self.assertIn('Source continuation after the input', measured['opened'])
+        self.assertIn('source suffix', measured['opened'])
+        self.assertEqual(measured['values'], ['2', '73.00%', '91.00%'])
+        self.assertIn('Legacy input', legacy['opened'])
+        self.assertTrue(displayed['route'])
+
     def test_criticism_uses_short_badges_and_preserves_legacy_decisions(self):
         import subprocess
         values=['survived','narrowed','rejected','inconclusive','Survived with a narrower mechanism: measured qualification.',

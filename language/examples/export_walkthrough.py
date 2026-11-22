@@ -148,6 +148,9 @@ def portable_metadata(value):
 
 
 def portable_report(page):
+    from language.tools.report import refresh_appendix
+
+    page = refresh_appendix(page)
     block = report_script_block(page, 'neuron-labels')
     if block is not None:
         labels = json.loads(block[1])
@@ -338,6 +341,9 @@ def export(run, output):
 
 
 if __name__ == '__main__':
+    if not __package__:
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument('--run', type=Path, help='completed investigation directory')

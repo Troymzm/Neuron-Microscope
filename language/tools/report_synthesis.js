@@ -183,27 +183,68 @@
   const figureInputs = Array.isArray(B.custom) ? B.custom : B.custom?.figures || [];
   const conditionName = row => row.tag || row.filler || row.country;
   const score = row => `${conditionName(row)} (${row.activation > 0 ? '+' : ''}${fmt(row.activation)})`;
+  const poles = {positive: 1, negative: -1};
+  const direction = row => poles[row.expected] * row.activation;
+  const list = new Intl.ListFormat('en');
+  const summarize = rows => list.format([
+    ...rows.slice(0, 3).map(score),
+    ...(rows.length > 3 ? [`${rows.length - 3} more`] : []),
+  ]);
+
+  function figureIntent(figure, rows) {
+    const lead = (figure.rationale || '').trim().split(/(?<=[.!?])\s+/, 1)[0]
+      .replace(/^Question:\s*/i, '').replace(/^[a-z]/, initial => initial.toUpperCase());
+    if (lead && lead.split(/\s+/).length <= 32 &&
+        !/\b(previous|prior|retained|revised|this version)\b|^The old\b|[+−]\d|(?:^|\s)-\d/i.test(lead)) return lead;
+    const targets = [...new Set(Object.keys(poles).map(pole => rows.find(row => row.expected === pole))
+      .filter(Boolean).map(conditionName))];
+    const control = rows.find(row => row.expected === 'neutral');
+    if (targets.length && control) return `Compare ${list.format(targets)} with ${conditionName(control)} in the same input frame.`;
+    return 'Compare the response across the input conditions shown below.';
+  }
+
   for (const figure of figureInputs) {
     if (!figure.id) continue;
-    const chart = document.getElementById('custom-' + figure.id)?.querySelector('figure');
+    const host = document.getElementById('custom-' + figure.id);
+    const chart = host?.querySelector('figure');
     if (!chart) continue;
-    const measured = (figure.results || []).filter(row => Number.isFinite(row.activation) && conditionName(row))
-      .sort((a, b) => Math.abs(b.activation) - Math.abs(a.activation));
+    const rows = (figure.results || []).filter(row => Number.isFinite(row.activation) && conditionName(row));
+    const measured = [...rows].sort((a, b) => Math.abs(b.activation) - Math.abs(a.activation));
     if (!measured.length) continue;
-    const target = measured.find(row => row.expected === 'positive' || row.expected === 'negative');
+
+    const rationale = host.querySelector('.why');
+    if (rationale) rationale.replaceChildren(figureIntent(figure, rows));
+    const targets = measured.filter(row => Object.hasOwn(poles, row.expected));
+    const aligned = targets.filter(row => direction(row) > 0);
     const controls = measured.filter(row => row.expected === 'neutral');
-    const [control] = controls;
-    let note;
-    if (target && control) {
-      note = `The largest absolute responses among the targeted conditions and planned controls were ${score(target)} and ${score(control)}, respectively.`;
-      if (controls.length > 1) note += ` The control closest to zero was ${score(controls.at(-1))}.`;
+    const notes = [];
+    if (targets.length) {
+      if (aligned.length) notes.push(`${score(aligned[0])} was the strongest correctly signed target condition.`);
+      for (const pole of Object.keys(poles)) {
+        const missed = targets.filter(row => row.expected === pole && direction(row) <= 0);
+        if (missed.length) notes.push(`For ${pole} predictions, ${summarize(missed)} missed the expected sign.`);
+      }
+      // Compare neutral responses with correctly signed targets on the same pole.
+      const medians = Object.fromEntries(Object.keys(poles).map(pole => {
+        const values = aligned.filter(row => row.expected === pole).map(row => Math.abs(row.activation));
+        if (!values.length) return [poles[pole], Infinity];
+        const mid = Math.floor(values.length / 2);
+        return [poles[pole], (values[mid] + values[Math.floor((values.length - 1) / 2)]) / 2];
+      }));
+      const overlapping = controls.filter(row => Math.abs(row.activation) >= medians[Math.sign(row.activation)]);
+      if (overlapping.length) {
+        notes.push(`Planned controls ${summarize(overlapping)} reached at least the median target magnitude in the same direction.`);
+      } else if (controls.length) {
+        notes.push(`${score(controls[0])} was the largest absolute control response.`);
+        if (controls.length > 1) notes.push(`${score(controls.at(-1))} was the control closest to zero.`);
+      }
     } else {
-      note = `${score(measured[0])} had the largest absolute response.`;
-      if (measured.length > 1) note += ` ${score(measured.at(-1))} was closest to zero.`;
+      notes.push(`${score(measured[0])} had the largest absolute response.`);
+      if (measured.length > 1) notes.push(`${score(measured.at(-1))} was closest to zero.`);
     }
     let caption = chart.querySelector('figcaption');
     if (!caption) chart.append(caption = $('figcaption', {class: 'cap'}));
-    caption.prepend($('div', {class: 'figure-readout'}, note));
+    caption.prepend($('div', {class: 'figure-readout'}, notes.join(' ')));
   }
 
   const assessment = 'Independent assessment of the frozen explanation';

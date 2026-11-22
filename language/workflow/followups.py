@@ -70,17 +70,20 @@ def load_source(source, report_snapshot=None, *, integrated=False):
     excluded = [str(row['id']) for row in evidence.get('documents', [])]
     return {'config': config, 'initial': initial, 'predictions': predictions,
             'original_criticism': original, 'catalog': catalog, 'excluded_documents': excluded,
+            'steering_evidence': {key: row for key, row in artifacts['evidence'].items()
+                                  if key.startswith('graph-')},
             'html': html,
             'files': {name: fingerprint(blob) for name, blob in files.items()}}
 
 
-def route_overlay(html, source, *, costs):
+def route_overlay(html, source, *, costs, load_steering_evidence=None):
     """Keep later blind predictions outside the frozen follow-up evidence."""
     result = source / 'route-prediction/result.json'
     if not result.exists():
         return html
     from report import update_route_prediction
-    page, _ = update_route_prediction(html, read(result), interpretation_costs=costs)
+    page, _ = update_route_prediction(html, read(result), interpretation_costs=costs,
+                                      load_steering_evidence=load_steering_evidence)
     return page
 
 
@@ -167,19 +170,27 @@ def run(source, root, options=None, *, in_place=False, client_factory=Client, ex
             elif not (output / 'paper-data.json').is_file():
                 write(output / 'paper-data.json', {'bundle': json.loads(BUNDLE.search(rendered.read_bytes().decode('utf-8'))[2])})
         if in_place:
-            from report import strip_neuron_labels, strip_report_synthesis
+            from report import refresh_appendix, refresh_tests, strip_neuron_labels, strip_report_synthesis
             current_html = (source / 'report/index.html').read_bytes().decode('utf-8')
             current_html = strip_neuron_labels(strip_report_synthesis(current_html))
             current = current_html.encode('utf-8')
             current_bundle = BUNDLE.search(current_html)
             # A previous promotion may have replaced the costs sidecar before the HTML.
-            costs = json.loads(current_bundle[2]).get('interpretation_costs') if current_bundle else None
-            if (fingerprint(current) != base['files']['report/index.html'] and
-                    current_html != route_overlay(base['html'], source, costs=costs)):
+            bundle = json.loads(current_bundle[2]) if current_bundle else {}
+            costs = bundle.get('interpretation_costs')
+            if fingerprint(current) != base['files']['report/index.html']:
                 page = rendered.read_bytes().decode('utf-8') if rendered.exists() else base['html']
-                if current_html not in (page, route_overlay(page, source, costs=costs)):
-                    legacy = legacy_scoring_view(page)
-                    if current_html not in (legacy, route_overlay(legacy, source, costs=costs)):
+                legacy = legacy_scoring_view(page)
+                candidates = (page, legacy, base['html'])
+                if current_html not in candidates:
+                    # Renderer upgrades can change saved HTML without changing any evidence.
+                    normalized = refresh_appendix(refresh_tests(current_html)).replace('\r\n', '\n')
+                    steering = (bundle.get('tests') or {}).get('steering') or []
+                    load_evidence = (lambda: base['steering_evidence']) if any(
+                        row.get('baseline_context') for row in steering) else None
+                    if not any(normalized == refresh_appendix(route_overlay(
+                            candidate, source, costs=costs, load_steering_evidence=load_evidence)).replace('\r\n', '\n')
+                               for candidate in candidates):
                         raise ValueError('Current report changed outside this follow-up investigation')
             if not foundation.exists():
                 temporary = foundation.with_suffix('.tmp')

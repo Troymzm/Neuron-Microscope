@@ -25,7 +25,10 @@ class Element {
   append(child) { this.children.push(child); }
   prepend(child) { this.children.unshift(child); }
   replaceChildren(...children) { this.children = children; }
-  querySelector(selector) { return this.children.find(node => node.tag === selector); }
+  querySelector(selector) {
+    return this.children.find(node => selector.startsWith('.')
+      ? node.attrs?.class === selector.slice(1) : node.tag === selector);
+  }
   remove() {}
 }
 const document = {};
@@ -43,6 +46,17 @@ const B = {
       {filler: 'Old negative', activation: -12.5},
       {filler: 'Old zero', activation: 0},
     ]},
+    {id: 'mixed', rationale: 'The previous controls were revised after an earlier experiment. This version varies the cue.',
+      results: [
+        {tag: 'Cue A', expected: 'positive', activation: 380},
+        {tag: 'Cue B', expected: 'positive', activation: 340},
+        {tag: 'Intended positive A', expected: 'positive', activation: -9},
+        {tag: 'Intended positive B', expected: 'positive', activation: -7.75},
+        {tag: 'Negative cue', expected: 'negative', activation: -10},
+        {tag: 'Neutral A', expected: 'neutral', activation: 366},
+        {tag: 'Neutral B', expected: 'neutral', activation: 366},
+        {tag: 'Small neutral', expected: 'neutral', activation: 1},
+      ]},
     {id: 'invalid', results: [
       {tag: 'Missing', activation: null},
       {tag: 'Unbounded', activation: Infinity},
@@ -89,6 +103,10 @@ const search = {querySelector: selector => selector === '.text' ? {querySelector
 const positiveCaption = $('figcaption', null, 'Signed product in replacement span.');
 const positiveFigure = $('div', null, $('figure', null, positiveCaption));
 const legacyFigure = $('div', null, $('figure', null));
+const mixedWhy = $('p', {class: 'why'}, 'Long revision history');
+mixedWhy.replaceChildren = value => { mixedWhy.children = [new Element('#text', value)]; };
+const mixedCaption = $('figcaption', null, 'Signed product at the scored token.');
+const mixedFigure = $('div', null, mixedWhy, $('figure', null, mixedCaption));
 const invalidCaption = $('figcaption', null, 'Method only.');
 const invalidFigure = $('div', null, $('figure', null, invalidCaption));
 const data = {
@@ -112,6 +130,7 @@ Object.assign(document, {
     'tests': tests,
     'custom-positive': positiveFigure,
     'custom-legacy': legacyFigure,
+    'custom-mixed': mixedFigure,
     'custom-invalid': invalidFigure,
   }[id]; },
   querySelector: selector => ({'#head h1': headline, '#head .lede': lede, '#claim .figs': claimFigures})[selector],
@@ -139,6 +158,12 @@ assert.equal(legacyReadout.attrs.class, 'figure-readout');
 assert.match(text(legacyReadout), /Old negative.*[−-]12\.5/);
 assert.match(text(legacyReadout), /Old zero.*\b0\b/);
 assert.doesNotMatch(text(legacyReadout), /Lowercase/);
+assert.match(text(mixedWhy), /^Compare .*Cue A.*Neutral A.*\.$/);
+assert.doesNotMatch(text(mixedWhy), /previous|earlier|revision/i);
+assert.match(text(mixedCaption.children[0]), /Intended positive A \(-9\).*Intended positive B \(-7\.75\).*missed the expected sign/);
+assert.match(text(mixedCaption.children[0]), /Neutral A \(\+366\).*Neutral B \(\+366\).*median target magnitude/);
+assert.doesNotMatch(text(mixedCaption.children[0]), /Small neutral/);
+assert.equal(text(mixedCaption.children[1]), 'Signed product at the scored token.');
 assert.equal(text(invalidCaption), 'Method only.');
 assert.deepEqual(claimFigures.children[0].children.map(text), [
   'Found [1]', 'Negative pole. Negative case', 'What would change my mind. Repeat the matched comparison',
@@ -162,6 +187,20 @@ assert.equal(focused, sample);
 
 
 class WalkthroughExportTest(unittest.TestCase):
+    def test_archived_appendix_refresh_uses_the_canonical_template(self):
+        from language.examples.export_walkthrough import portable_report
+        from language.tools.report import REPORT_TEMPLATE, refresh_appendix
+
+        source = REPORT_TEMPLATE.read_text(encoding='utf-8')
+        start = source.index('// 9. Appendix.')
+        end = source.index('</script>', start)
+        placeholder = "// 9. Appendix.\n(() => { sec('appendix','Appendix',null,$('span',{class:'tile'},'—')); })();\n"
+        archived = source[:start] + placeholder + source[end:]
+        refreshed = refresh_appendix(archived)
+        self.assertEqual(refreshed, source)
+        self.assertEqual(portable_report(archived), source)
+        self.assertEqual(refresh_appendix(refreshed), refreshed)
+
     def test_refresh_keeps_peak_helpers_for_a_legacy_report(self):
         from language.examples.export_walkthrough import refresh_synthesis, report_script_block
         from language.tools.report import update_report_synthesis

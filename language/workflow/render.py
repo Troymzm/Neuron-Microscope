@@ -138,7 +138,7 @@ def corpus_peak_fields(report, data):
 
 
 def assemble(root, initial_report, neuron, artifacts, cards):
-    from report import merge, source_bundle
+    from report import merge, source_bundle, with_steering_baselines
     from paper_sections import exemplar, search_patch
     from report_layout import headline
     from saved_display import default_anatomy
@@ -167,7 +167,7 @@ def assemble(root, initial_report, neuron, artifacts, cards):
     for i, criticism in enumerate(revised['criticism']):
         patch['criticism'].append({**{k: v for k, v in criticism.items() if k != 'evidence_ids'}, 'round': i + 1,
             'evidence': [evidence[identity] for identity in criticism['evidence_ids']]})
-    patch['tests'] = artifacts['tests']
+    patch['tests'] = with_steering_baselines(artifacts['tests'], evidence)
     patch['ablation'] = artifacts.get('ablation')
     # Restore measured token-level output effects independently of narrative choices.
     if not patch['logit_effect']:
@@ -196,6 +196,17 @@ def assemble(root, initial_report, neuron, artifacts, cards):
     write(output / 'paper-data.json', {'bundle': bundle})
     write(output / 'interpretation-costs.json', patch['interpretation_costs'])
     return output
+
+
+def appendix_history(root):
+    """Expose saved explanation rounds without local paths or cached responses."""
+    path = root / 'interpretation-history.json'
+    if not path.is_file():
+        return []
+    fields = ('labelled', 'requested', 'directional_accuracy', 'directional_coverage')
+    return [{'round': row['round'], 'selected': row.get('selected', False),
+             **{key: row.get('summary', {}).get(key) for key in fields}}
+            for row in read(path)]
 
 
 def finalize_report(root, result, config, *, followup):
@@ -231,6 +242,8 @@ def finalize_report(root, result, config, *, followup):
             missing = {key: recovered[key] for key in signed_fields if key not in census and key in recovered}
             if missing:
                 synthesis['peak_census'] = {**census, **missing}
+    if synthesis is not None and (history := appendix_history(root)):
+        synthesis['interpretation_history'] = history
     return update_routes(root, result, config, page=page, synthesis=synthesis)
 
 
@@ -243,7 +256,15 @@ def update_routes(root, result, config, *, page=None, synthesis=None):
     if page is None:
         page = strip_report_synthesis((output / 'index.html').read_text(encoding='utf-8'))
         page, _ = report_overlay(page, root)
-    page, bundle = update_route_prediction(page, result,
+
+    def load_steering_evidence():
+        try:
+            return read(root / 'artifacts.json').get('evidence')
+        except (OSError, ValueError):
+            # A saved report can still display its source trace without the run archive.
+            return None
+
+    page, bundle = update_route_prediction(page, result, load_steering_evidence=load_steering_evidence,
         interpretation_costs=costs(root, config['neuron'], len(config['gpus'])))
     if synthesis is not None:
         page, bundle = update_report_synthesis(page, synthesis)

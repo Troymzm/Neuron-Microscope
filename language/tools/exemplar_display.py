@@ -20,11 +20,24 @@ STYLE = '''<style id="example-fold-style">
 #exemplars .example-fold + .example-fold,#clusters .example-fold + .example-fold{border-top:1px solid var(--rule2,#d9d9df);padding-top:14px}
 .steering-table{width:100%;table-layout:fixed}
 .steering-table th:first-child{width:65%}
+.steering-table th,.steering-table td{padding-right:4px}
+.steering-table th{overflow-wrap:anywhere}
 .steering-table th:not(:first-child){text-align:right}
+.steering-table td.num{width:auto}
+.steering-table td.num .tile{min-width:0;padding:2px 4px;font-size:12px}
 .steering-table .ex{grid-template-columns:64px minmax(0,1fr);font-size:13px;line-height:1.5}
 .steering-table .example-fold{margin:0;padding:0;border:0}
 .steering-table .example-toggle{margin-left:76px}
 .steering-table .quiet{font-size:12px;line-height:1.4}
+.steering-table .toks{overflow-wrap:anywhere;white-space:pre-wrap}
+@media(max-width:620px){
+  .steering-table th:first-child{width:52%}
+  .steering-table td.num .tile{font-size:11px;padding:2px}
+  .steering-table .ex{grid-template-columns:minmax(0,1fr);gap:2px}
+  .steering-table .ex > .tile{justify-self:start}
+  .steering-table .example-toggle{margin-left:0}
+}
+@media(max-width:390px){.steering-table th:first-child{width:44%}}
 .graph-context{margin:8px 0 14px;font-size:14px;line-height:1.5}
 .graph-context > summary{cursor:pointer}
 .graph-context > summary .sub{display:block;margin:0 0 4px}
@@ -32,15 +45,26 @@ STYLE = '''<style id="example-fold-style">
 </style>'''
 
 
-def render(source):
+def install(source):
+    """Make the shared folding helper and its styles available to report sections."""
     match = re.search(r'// 2\. Exemplars[^\n]*\n', source)
     if match is None:
         return source
+    helper = HELPER.read_text(encoding='utf-8') + '\n'
     if MARKER in source:
-        source=re.sub(r'// Exemplar display context:.*?(?=// 2\. Exemplars)',
-                      lambda m:HELPER.read_text()+'\n',source,count=1,flags=re.S)
+        source = re.sub(r'// Exemplar display context:.*?(?=// 2\. Exemplars)',
+                        lambda _: helper, source, count=1, flags=re.S)
     else:
-        source = source[:match.start()] + HELPER.read_text() + '\n' + source[match.start():]
+        source = source[:match.start()] + helper + source[match.start():]
+    source = re.sub(r'<style id="example-fold-style">.*?</style>', '', source, flags=re.S)
+    head, separator, tail = source.partition('</head>')
+    return head.rstrip() + '\n' + STYLE + '\n' + separator + tail if separator else source
+
+
+def render(source):
+    source = install(source)
+    if MARKER not in source:
+        return source
     start=source.find('// 1b. Activation spectrum')
     stop=source.find(MARKER,start)
     if start>=0 and stop>start:
@@ -74,6 +98,4 @@ def render(source):
     source = source.replace(
         'exList(r.examples.slice(0, 2))',
         'exList(r.examples.slice(0, 2), undefined, undefined, true)')
-    source=re.sub(r'<style id="example-fold-style">.*?</style>','',source,flags=re.S)
-    head,separator,tail=source.partition('</head>')
-    return head.rstrip()+'\n'+STYLE+'\n'+separator+tail if separator else source
+    return source
