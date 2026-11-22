@@ -10,7 +10,7 @@ function el(tag,cls,text){const n=document.createElement(tag);if(cls)n.className
 function p(host,text,cls=''){host.append(el('p',cls,text));}
 function button(text,fn,cls='quiet-button'){const b=el('button',cls,text);b.type='button';b.onclick=fn;return b;}
 function link(text,url){const a=el('a','',text);a.href=url;a.target='_blank';a.rel='noopener';return a;}
-const cache=new Map();async function get(path){if(!cache.has(path))cache.set(path,fetch(path+'?v=reasoning-mix-v2').then(r=>{if(!r.ok)throw Error(t('读取记录失败：','Could not load record: ')+path);return r.json();}));return cache.get(path);}
+const cache=new Map();async function get(path){if(!cache.has(path))cache.set(path,fetch(path+'?v=reasoning-mix-v4').then(r=>{if(!r.ok)throw Error(t('读取记录失败：','Could not load record: ')+path);return r.json();}));return cache.get(path);}
 let data,current=0,activeTab='overview',revision=0,experiment='search',coverSnapshot='final';
 const steps=[
  {id:'scan',nav:t('准备证据','Prepare evidence'),role:t('固定程序','Python'),title:t('从100M激活中整理解释证据','Prepare evidence from 100M activations'),summary:t('程序按激活区间均分500个位置，并整理极值、Exemplars、分位样本和token统计。','Code allocates 500 positions equally across activation bins and gathers extrema, exemplars, quantile cases and token statistics.')},
@@ -213,9 +213,10 @@ function followupView(host){
   host.append(link(t('查看报告中的追加调查 ↗','View follow-ups in the report ↗'),data.followup.report));
 }
 function synthesisView(host){
-  const {claim,evidence}=data.synthesis;
+  const {claim,evidence,report_generation:generation}=data.synthesis;
   host.append(el('h3','explanation-title',claim.title));
   p(host,claim.lede,'explanation-lede');
+  if(generation?.source==='deepseek')p(host,t('DeepSeek 根据已有实验生成本节结论。可在实际 Prompt 中查看本次生成记录。','DeepSeek generated these findings from saved measurements. The prompts tab shows the calls for this revision.'));
   for(const [key,title] of Object.entries(findingTitles)){
     const finding=claim.findings[key];
     if(!finding)continue;

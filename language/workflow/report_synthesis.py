@@ -311,7 +311,7 @@ def synthesize_criticism(client, bundle, stage):
     if not investigated:
         return {}
 
-    conclusion = {'type': 'string', 'minLength': 1, 'maxLength': 480}
+    conclusion = {'type': 'string', 'minLength': 1}
     schemas = {}
     for identity, question in investigated.items():
         evidence_ids = dict.fromkeys(key for source in [question['original'], *question['followups']]

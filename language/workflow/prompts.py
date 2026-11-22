@@ -328,9 +328,12 @@ empty retrieval and ambiguous matches cannot refute a claim. Retain conflicting 
 important scope limits. Distinguish causal prefixes and scored tokens from following text, controlled
 probes from natural examples, and attribution from intervention. Reused observations do not provide
 independent confirmation. State the outcome and its reason in one short paragraph, not a chronology.
-Cite up to three representative evidence IDs listed under that question, prioritizing the observation
-that changes the judgment and the strongest counterexample or limit. Cite a whole result if no sample
-is available for it. Use only recorded measurements and keep detailed numbers in the evidence.'''
+Cite up to three representative evidence IDs listed under that question. If both follow-up rounds
+contain distinct evidence relevant to the judgment, reflect both rounds in the conclusion and cite
+at least one result from each. Prioritize the observations that change the judgment or show its
+strongest counterexample or limit. Cite a reused observation once. Mention failed or empty follow-ups
+when they limit the conclusion. Cite a whole result if no sample is available for it. Use only
+recorded measurements and keep detailed numbers in the evidence.'''
 
 REPORT_FINDING_SLOTS = {
     'main_response': ('State what the neuron primarily responds to and the conditions for strong activation. '
