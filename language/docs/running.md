@@ -36,6 +36,8 @@ The configuration generator sets the neuron, GPU group, shared GPU lock, API slo
 
 Set `DEEPSEEK_API_KEY` in the environment or point `NEURON_PAPER_API_KEY_FILE` to a local credential file. Keep credentials out of configuration files and Git. API records omit authentication headers.
 
+If the container reaches the API through an HTTP proxy, set `NEURON_PAPER_PROXY_FROM_ENV=1` when launching the workflow. The client then uses the container's `HTTPS_PROXY` or `https_proxy` and respects `NO_PROXY`. This environment setting works with an existing run configuration and output directory.
+
 ```bash
 python -m language --config workflow.local.json --output runs/example
 python -m http.server 8000 --directory runs/example/report

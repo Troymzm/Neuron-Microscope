@@ -202,7 +202,8 @@ class Client:
             ca = os.environ.get('SSL_CERT_FILE')
             if ca is None and Path('/etc/ssl/certs/ca-certificates.crt').is_file():
                 ca = '/etc/ssl/certs/ca-certificates.crt'
-            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}),
+            proxies = None if os.environ.get('NEURON_PAPER_PROXY_FROM_ENV') == '1' else {}
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler(proxies),
                 urllib.request.HTTPSHandler(context=ssl.create_default_context(cafile=ca)))
             req = urllib.request.Request(url, data=json.dumps(request, ensure_ascii=False).encode(),
                 headers={'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json'})

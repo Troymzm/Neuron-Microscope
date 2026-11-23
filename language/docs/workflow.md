@@ -58,7 +58,8 @@ Optional `publish`, `references` and `publish_neurons` fields export reports and
 
 `status.json` reports the current step. `api/` retains requests, raw streams, reasoning, outputs, usage, cost estimates and timing. `measurements/`, `atlas/`, `graphs/` and `ablation/` retain measured data. `artifacts.json` supplies the renderer. No authentication headers are stored.
 
-API calls connect directly, ignoring system proxy settings. HTTP errors,
+API calls connect directly by default. Set `NEURON_PAPER_PROXY_FROM_ENV=1` to use
+the standard environment proxy settings. HTTP errors,
 connection failures and interrupted streams propagate to the caller without
 automatic transport retries. A single JSON-contract correction reports all invalid
 enum references together, including when resuming old failed responses. References

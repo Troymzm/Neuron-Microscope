@@ -569,6 +569,26 @@ class WorkflowTests(unittest.TestCase):
         self.assertIs(labels, predictions)
         self.assertEqual(client.calls, ['report-analysis', 'final-review'])
 
+    def test_api_uses_environment_proxy_only_when_enabled(self):
+        proxy = 'http://127.0.0.1:7897'
+        no_proxy = 'localhost,127.0.0.1,::1'
+        env = {'DEEPSEEK_API_KEY': 'fixture', 'HTTPS_PROXY': proxy, 'NO_PROXY': no_proxy}
+        with (tempfile.TemporaryDirectory() as folder,
+              patch.dict(os.environ, env, clear=True),
+              patch('urllib.request.build_opener') as build_opener):
+            root = Path(folder)
+            client = Client({}, root / 'api', root / 'slots')
+            response = build_opener.return_value.open.return_value.__enter__.return_value
+            response.status, response.headers = 200, {}
+            for enabled, expected in ((False, {}), (True, {'https': proxy, 'no': no_proxy})):
+                with self.subTest(enabled=enabled):
+                    if enabled:
+                        os.environ['NEURON_PAPER_PROXY_FROM_ENV'] = '1'
+                    with client._exchange('https://api.example.invalid/v1', {}, root / 'api', {}):
+                        pass
+                    handler = build_opener.call_args.args[0]
+                    self.assertEqual(handler.proxies, expected)
+
     def test_price_accounts_for_cached_tokens(self):
         usage = {'prompt_tokens': 1000, 'prompt_cache_hit_tokens': 500, 'completion_tokens': 100}
         pricing = {'cached_input_per_million': .003, 'input_per_million': .15, 'output_per_million': .6}
