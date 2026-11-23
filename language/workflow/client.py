@@ -92,12 +92,20 @@ class Client:
     def request_text(self, name, prompt, packet, stage):
         return self.request(name, prompt, packet, None, stage)['text']
 
-    def request(self, name, prompt, packet, schema, stage, check=None):
+    def request(self, name, prompt, packet, schema, stage, check=None, *, previous_schema=None):
         folder = self.root / name
         system = prompt if schema is None else prompt + prompts.SCHEMA_HEADER + json.dumps(schema)
         messages = [{'role': 'system', 'content': system},
                     {'role': 'user', 'content': json.dumps(packet, ensure_ascii=False)}]
-        fingerprint = hashlib.sha256(json.dumps(messages, sort_keys=True).encode()).hexdigest()
+        def input_id(request_messages):
+            return hashlib.sha256(json.dumps(request_messages, sort_keys=True).encode()).hexdigest()
+
+        fingerprint = input_id(messages)
+        # A relaxed schema may reuse earlier answers for the exact same prompt and packet.
+        previous_messages = None
+        if previous_schema is not None and folder.exists():
+            previous_messages = [{'role': 'system', 'content': prompt + prompts.SCHEMA_HEADER
+                                  + json.dumps(previous_schema())}, messages[1]]
 
         def decode(answer):
             return {'text': answer} if schema is None else parse_output(answer, schema)
@@ -131,7 +139,8 @@ class Client:
         if (folder / 'result.json').exists():
             saved = read(folder / 'result.json')
             if saved['input_id'] != fingerprint:
-                raise ValueError(f'Inputs changed for completed step {name}; choose a new output directory')
+                if previous_messages is None or saved['input_id'] != input_id(previous_messages):
+                    raise ValueError(f'Inputs changed for completed step {name}; choose a new output directory')
             try:
                 output = checked(saved['output'])
             except (ValueError, KeyError, TypeError):
@@ -148,7 +157,7 @@ class Client:
             if completion.get('status') == 'failed' or completion.get('finish_reason') not in ('stop', 'end_turn'):
                 continue
             request = read(attempt / 'request.json')
-            if request.get('messages', request.get('input'))[:2] != messages:
+            if request.get('messages', request.get('input'))[:2] not in (messages, previous_messages):
                 continue
             try:
                 answer = (attempt / 'output.txt').read_text(encoding='utf-8').strip()

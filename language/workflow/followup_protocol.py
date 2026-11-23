@@ -7,10 +7,10 @@ ROUNDS = 2
 MAX_INVESTIGATIONS = 5
 
 
-def plan_schema(criticism_ids, evidence_ids):
+def plan_schema(criticism_ids, evidence_ids, *, evidence_limit=None):
     investigation = obj(question=TEXT, criticism_ids=arr(string(*criticism_ids), 1),
                         action=string('review', 'contrast', 'corpus'),
-                        evidence_ids=arr(string(*evidence_ids), 0, 8),
+                        evidence_ids=arr(string(*evidence_ids), maximum=evidence_limit),
                         hypothesis=TEXT, rival=TEXT, prediction_if_hypothesis=TEXT,
                         prediction_if_rival=TEXT, distinguishing_observation=TEXT, why_new=TEXT)
     return obj(decision=string('continue', 'stop'), reason=TEXT,

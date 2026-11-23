@@ -101,7 +101,8 @@ def rounds(client, executor, base, root, options, timeline):
         plan = client.request(f'round-{number}/plan', prompts.FOLLOWUP_PLAN,
             {**context, 'round': number, 'maximum_investigations': protocol.MAX_INVESTIGATIONS,
              'evidence_catalog': previews}, protocol.plan_schema(criticism_ids, list(catalog)), 1,
-            check=lambda output: protocol.check_plan(output, catalog))
+            check=lambda output: protocol.check_plan(output, catalog),
+            previous_schema=lambda: protocol.plan_schema(criticism_ids, list(catalog), evidence_limit=8))
         current = {'round': number, 'plan': plan, 'investigations': [], 'skipped_duplicates': []}
         for index, question in enumerate(plan['investigations'], 1):
             key = re.sub(r'\W+', ' ', question['question'].casefold()).strip()
